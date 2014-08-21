@@ -21,6 +21,9 @@
 //                 GND----------GND   (ground in)
 // \endcode
 
+#include <avr/wdt.h>
+#include <avr/sleep.h>
+#include <avr/interrupt.h>
 #include <SFE_BMP180.h>
 #include <Wire.h>
 #include "DHT.h"
@@ -33,12 +36,19 @@ RH_NRF24 nrf24(9);
 DHT dht;
 // Costruttore driver sensore pressione
 SFE_BMP180 pressure;
-#define ALTITUDE 0.0 // Altitude of SparkFun's HQ in Boulder, CO. in meters
 
+//#define ALTITUDE 0.0 // Altitude of SparkFun's HQ in Boulder, CO. in meters
+#define STANBY_SEC 300 //Secondi tra ogni trasmissione (multiplo di 16)
+
+int wakeCount; //Contatore del numero di wakeUp del watchDog (solo ogni secondi/8 volte deve inviare il segnale) 
+int cycleNum;
 void setup()
-{
+{ 
   Serial.begin(9600);
   Serial.println("REBOOT");
+  cycleNum = (int)(STANBY_SEC/8-STANBY_SEC/95);
+  wakeCount=(cycleNum-1);
+  
   // Initialize the sensor (it is important to get calibration values stored on the device).
   if (pressure.begin())
     Serial.println("BMP180 init success");
@@ -51,6 +61,7 @@ void setup()
     setup();
   }
   
+  set_sleep_mode(SLEEP_MODE_PWR_SAVE);
   //inizializza sensore DHT 
   dht.setup(2); // data pin 2
   if (!nrf24.init())
@@ -63,113 +74,165 @@ void setup()
 
 void loop()
 {
-  //Controlla le condizioni e le invia ongi 5min
-  char status;
-  double T,P;
-  float humidity, temperature;
-  // You must first get a temperature measurement to perform a pressure reading.
   
-  // Start a temperature measurement:
-  // If request is successful, the number of ms to wait is returned.
-  // If request is unsuccessful, 0 is returned.
-  status = pressure.startTemperature();
-  if (status != 0)
-  {
-    // Wait for the measurement to complete:
-    delay(status);
-
-    // Retrieve the completed temperature measurement:
-    // Note that the measurement is stored in the variable T.
-    // Function returns 1 if successful, 0 if failure.
-
-    status = pressure.getTemperature(T);
+ if(wakeCount==(cycleNum-1))
+ {
+   wakeCount=0;
+    //Controlla le condizioni e le invia ongi 75 cicli di watchDog
+    char status;
+    double T,P;
+    float humidity, temperature;
+    // You must first get a temperature measurement to perform a pressure reading.
+    
+    // Start a temperature measurement:
+    // If request is successful, the number of ms to wait is returned.
+    // If request is unsuccessful, 0 is returned.
+    status = pressure.startTemperature();
     if (status != 0)
     {
-      // Print out the measurement:
-      Serial.print("temperature of BMP180: ");
-      Serial.print(T,2);
-      Serial.println(" deg C");
-      
-      // Start a pressure measurement:
-      // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
-      // If request is successful, the number of ms to wait is returned.
-      // If request is unsuccessful, 0 is returned.
-      status = pressure.startPressure(3);
+      // Wait for the measurement to complete:
+      delay(status);
+  
+      // Retrieve the completed temperature measurement:
+      // Note that the measurement is stored in the variable T.
+      // Function returns 1 if successful, 0 if failure.
+  
+      status = pressure.getTemperature(T);
       if (status != 0)
       {
-        // Wait for the measurement to complete:
-        delay(status);
-
-        // Retrieve the completed pressure measurement:
-        // Note that the measurement is stored in the variable P.
-        // Note also that the function requires the previous temperature measurement (T).
-        // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
-        // Function returns 1 if successful, 0 if failure.
-
-        status = pressure.getPressure(P,T);
+        // Print out the measurement:
+//        Serial.println();
+//        Serial.print("temperature of BMP180: ");
+//        Serial.print(T,2);
+//        Serial.println(" deg C");
+//        
+        // Start a pressure measurement:
+        // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
+        // If request is successful, the number of ms to wait is returned.
+        // If request is unsuccessful, 0 is returned.
+        status = pressure.startPressure(3);
         if (status != 0)
         {
-          // Print out the measurement:
-          Serial.print("absolute pressure: ");
-          Serial.print(P,2);
-          Serial.println(" mb");
+          // Wait for the measurement to complete:
+          delay(status);
+  
+          // Retrieve the completed pressure measurement:
+          // Note that the measurement is stored in the variable P.
+          // Note also that the function requires the previous temperature measurement (T).
+          // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
+          // Function returns 1 if successful, 0 if failure.
+  
+          status = pressure.getPressure(P,T);
+          if (status != 0)
+          {
+            // Print out the measurement:
+//            Serial.print("absolute pressure: ");
+//            Serial.print(P,2);
+//            Serial.println(" mb");
+          }
+          else Serial.println("error retrieving pressure measurement\n");
         }
-        else Serial.println("error retrieving pressure measurement\n");
+        else Serial.println("error starting pressure measurement\n");
       }
-      else Serial.println("error starting pressure measurement\n");
+      else Serial.println("error retrieving temperature measurement\n");
     }
-    else Serial.println("error retrieving temperature measurement\n");
-  }
-  else Serial.println("error starting temperature measurement\n");
+    else Serial.println("error starting temperature measurement\n");
+    
+    //delay(dht.getMinimumSamplingPeriod());
+    
+    //recupero i valori dal sensore DHT 
+    humidity = dht.getHumidity();
+    temperature = dht.getTemperature();
   
-  //delay(dht.getMinimumSamplingPeriod());
+    //Stampo i valori appena letti
+//    Serial.print("DHT Status: ");
+//    Serial.println(dht.getStatusString());
+//    Serial.print("tHumidity (%): ");
+//    Serial.println(humidity, 1);
+//    Serial.print("tTemperature (C)/t(F): ");
+//    Serial.print(temperature, 1);
+//    Serial.print("/ ");
+//    Serial.println(dht.toFahrenheit(temperature), 1);
+    //delay(100);
+    
+    //creo le stringhe con i dati appena rilevati
+    char pressione[7]; 
+    dtostrf(P,4,2,pressione);
+    char umidita[6];
+    dtostrf(humidity,3,2,umidita);
+    char temperatura[6];
+    dtostrf(temperature,3,2,temperatura);
+    
+    //creo messaggio da inviare
+    uint8_t data[20];
+    data[0]='p';
+    for(int i=1;i<8;i++) 
+      data[i]=pressione[(i-1)];
+    data[8]='u';
+    for(int i=9;i<14;i++) 
+      data[i]=umidita[(i-9)];
+    data[14]='t';
+    for(int i=15;i<20;i++) 
+      data[i]=temperatura[(i-15)];
+    data[20]='\0';
+   
+    //invio messaggio
+//    Serial.println("Sending to nrf24_server");
+//    Serial.println((char*)data);
+    // Send a message to nrf24_server
+    nrf24.send(data, sizeof(data));
+    nrf24.waitPacketSent();
+    delay(100);
+    //power down
+    nrf24.setModeIdle();
   
-  //recupero i valori dal sensore DHT 
-  humidity = dht.getHumidity();
-  temperature = dht.getTemperature();
+    //pausa 
+    //delay(299900);
+    wdt_reset();
+    myWatchdogEnable();
+    //Serial.println("...going to sleep.");
+    //delay(100);
+    sleep_mode();
+ }
+ else
+ {
+   wakeCount++;
+   //Serial.print(wakeCount);
+   //delay(100);
+   wdt_reset();
+   myWatchdogEnable();
+   //Serial.println("...going to sleep.");
+   //delay(100);
+   sleep_mode();
+ }
+}
 
-  //Stampo i valori appena letti
-  Serial.print("DHT Status: ");
-  Serial.println(dht.getStatusString());
-  Serial.print("tHumidity (%): ");
-  Serial.println(humidity, 1);
-  Serial.print("tTemperature (C)/t(F): ");
-  Serial.print(temperature, 1);
-  Serial.print("/ ");
-  Serial.println(dht.toFahrenheit(temperature), 1);
-  //delay(100);
-  
-  //creo le stringhe con i dati appena rilevati
-  char pressione[7]; 
-  dtostrf(P,4,2,pressione);
-  char umidita[6];
-  dtostrf(humidity,3,2,umidita);
-  char temperatura[6];
-  dtostrf(temperature,3,2,temperatura);
-  
-  //creo messaggio da inviare
-  uint8_t data[20];
-  data[0]='p';
-  for(int i=1;i<8;i++) 
-    data[i]=pressione[(i-1)];
-  data[8]='u';
-  for(int i=9;i<14;i++) 
-    data[i]=umidita[(i-9)];
-  data[14]='t';
-  for(int i=15;i<20;i++) 
-    data[i]=temperatura[(i-15)];
-  data[20]='\0';
- 
-  //invio messaggio
-  Serial.println("Sending to nrf24_server");
-  Serial.println((char*)data);
-  // Send a message to nrf24_server
-  nrf24.send(data, sizeof(data));
-  nrf24.waitPacketSent();
-  delay(100);
-  //power down
-  nrf24.setModeIdle();
 
-  //pausa 
-  delay(299900);
+/***************************************************
+ *  Name:        ISR(WDT_vect)
+ *
+ *  Returns:     Nothing.
+ *
+ *  Parameters:  None.
+ *
+ *  Description: Watchdog Interrupt Service. This
+ *               is executed when watchdog timed out.
+ *
+ ***************************************************/
+ISR(WDT_vect)
+{
+  cli();
+  wdt_disable();
+  //Serial.println("wakeup!");
+  sei();
+}
+
+void myWatchdogEnable() {  // turn on watchdog timer; interrupt mode every 2.0s
+  cli();
+  MCUSR = 0;
+  WDTCSR |= B00011000;
+  // WDTCSR = B01000111; // 2 second WDT 
+  //WDTCSR = B01100000;    // 4 second WDT 
+  WDTCSR = B01100001;  // 8 second WDT 
+  sei();
 }
