@@ -77,7 +77,8 @@ void loop()
   
  if(wakeCount==(cycleNum-1))
  {
-   wakeCount=0;
+    wakeCount=0;
+    dht.resetTimer();
     //Controlla le condizioni e le invia ongi 75 cicli di watchDog
     char status;
     double T,P;
@@ -141,6 +142,8 @@ void loop()
     //delay(dht.getMinimumSamplingPeriod());
     
     //recupero i valori dal sensore DHT 
+    
+    delay(dht.getMinimumSamplingPeriod());
     humidity = dht.getHumidity();
     temperature = dht.getTemperature();
   
@@ -153,7 +156,7 @@ void loop()
 //    Serial.print(temperature, 1);
 //    Serial.print("/ ");
 //    Serial.println(dht.toFahrenheit(temperature), 1);
-    //delay(100);
+//    delay(100);
     
     //creo le stringhe con i dati appena rilevati
     char pressione[7]; 
@@ -177,8 +180,8 @@ void loop()
     data[20]='\0';
    
     //invio messaggio
-//    Serial.println("Sending to nrf24_server");
-//    Serial.println((char*)data);
+    //Serial.println("Sending to nrf24_server");
+    //Serial.println((char*)data);
     // Send a message to nrf24_server
     nrf24.send(data, sizeof(data));
     nrf24.waitPacketSent();
