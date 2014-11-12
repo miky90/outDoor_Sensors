@@ -28,10 +28,16 @@
 #include <Wire.h>
 #include "DHT.h"
 #include <SPI.h>
-#include <RH_NRF24.h>
+#include <RF24Network.h>
+#include <RF24.h>
+
+#define MY_ADDRESS 011
+#define PARENT_ADDRESS 01
 
 // Singleton instance of the radio driver 
-RH_NRF24 nrf24(9);
+RF24 radio(9,10);
+// Network uses that radio
+RF24Network network(radio);
 // Costruttore driver sensore temperatura/umidita
 DHT dht;
 // Costruttore driver sensore pressione
@@ -39,6 +45,15 @@ SFE_BMP180 pressure;
 
 //#define ALTITUDE 0.0 // Altitude of SparkFun's HQ in Boulder, CO. in meters
 #define STANBY_SEC 300 //Secondi tra ogni trasmissione (multiplo di 16)
+
+struct payload_Sensor_1
+{
+  float temp;
+  float hum;
+  float pres;
+  float tempOfBmp;
+  int battery_level; 
+};
 
 int wakeCount; //Contatore del numero di wakeUp del watchDog (solo ogni secondi/8 volte deve inviare il segnale) 
 int cycleNum;
@@ -48,6 +63,8 @@ void setup()
   Serial.println("REBOOT");
   cycleNum = (int)(STANBY_SEC/8-STANBY_SEC/95);
   wakeCount=(cycleNum-1);
+  
+  SPI.begin();
   
   // Initialize the sensor (it is important to get calibration values stored on the device).
   if (pressure.begin())
@@ -63,13 +80,10 @@ void setup()
   
   set_sleep_mode(SLEEP_MODE_PWR_SAVE);
   //inizializza sensore DHT 
-  dht.setup(2); // data pin 2
-  if (!nrf24.init())
-    Serial.println("init failed");
-  if (!nrf24.setChannel(10))
-    Serial.println("setChannel failed");
-  if (!nrf24.setRF(RH_NRF24::DataRate250kbps, RH_NRF24::TransmitPower0dBm))
-    Serial.println("setRF failed");    
+  dht.setup(2, DHT::DHT22); // data pin 2
+
+  radio.begin();
+  network.begin(/*channel*/ 10, /*node address*/ MY_ADDRESS);   
 }
 
 void loop()
@@ -142,14 +156,19 @@ void loop()
     //delay(dht.getMinimumSamplingPeriod());
     
     //recupero i valori dal sensore DHT 
+    uint8_t k=3;
+    do {
+      Serial.println(k);
+      delay(dht.getMinimumSamplingPeriod());
+      humidity = dht.getHumidity();
+      temperature = dht.getTemperature();
+      k--;
+    }
+    while(dht.getStatus() == DHT::ERROR_TIMEOUT && k>0);
     
-    delay(dht.getMinimumSamplingPeriod());
-    humidity = dht.getHumidity();
-    temperature = dht.getTemperature();
-  
     //Stampo i valori appena letti
-//    Serial.print("DHT Status: ");
-//    Serial.println(dht.getStatusString());
+    Serial.print("DHT Status: ");
+    Serial.println(dht.getStatusString());
 //    Serial.print("tHumidity (%): ");
 //    Serial.println(humidity, 1);
 //    Serial.print("tTemperature (C)/t(F): ");
@@ -158,36 +177,11 @@ void loop()
 //    Serial.println(dht.toFahrenheit(temperature), 1);
 //    delay(100);
     
-    //creo le stringhe con i dati appena rilevati
-    char pressione[7]; 
-    dtostrf(P,4,2,pressione);
-    char umidita[6];
-    dtostrf(humidity,3,2,umidita);
-    char temperatura[6];
-    dtostrf(temperature,3,2,temperatura);
-    
-    //creo messaggio da inviare
-    uint8_t data[20];
-    data[0]='p';
-    for(int i=1;i<8;i++) 
-      data[i]=pressione[(i-1)];
-    data[8]='u';
-    for(int i=9;i<14;i++) 
-      data[i]=umidita[(i-9)];
-    data[14]='t';
-    for(int i=15;i<20;i++) 
-      data[i]=temperatura[(i-15)];
-    data[20]='\0';
-   
     //invio messaggio
-    //Serial.println("Sending to nrf24_server");
-    //Serial.println((char*)data);
-    // Send a message to nrf24_server
-    nrf24.send(data, sizeof(data));
-    nrf24.waitPacketSent();
-    delay(100);
-    //power down
-    nrf24.setModeIdle();
+    Serial.println("Sending to meteo station");
+    payload_Sensor_1 payload = { temperature, humidity, P, T, NAN};
+    RF24NetworkHeader header(/*to node*/ PARENT_ADDRESS);
+    network.write(header,&payload,sizeof(payload));
   
     //pausa 
     //delay(299900);
