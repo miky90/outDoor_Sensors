@@ -46,6 +46,7 @@ SFE_BMP180 pressure;
 //#define ALTITUDE 0.0 // Altitude of SparkFun's HQ in Boulder, CO. in meters
 #define STANBY_SEC 300 //Secondi tra ogni trasmissione (multiplo di 16)
 
+//Struttura dati pacchetti rete
 struct payload_Sensor_1
 {
   float temp;
@@ -55,8 +56,10 @@ struct payload_Sensor_1
   int battery_level; 
 };
 
+//variabili
 int wakeCount; //Contatore del numero di wakeUp del watchDog (solo ogni secondi/8 volte deve inviare il segnale) 
 int cycleNum;
+
 void setup()
 { 
   Serial.begin(9600);
@@ -65,79 +68,56 @@ void setup()
   wakeCount=(cycleNum-1);
   
   SPI.begin();
-  
   // Initialize the sensor (it is important to get calibration values stored on the device).
   if (pressure.begin())
     Serial.println("BMP180 init success");
   else
   {
-    // Oops, something went wrong, this is usually a connection problem,
-    // see the comments at the top of this sketch for the proper connections.
     Serial.println("BMP180 init fail\n\n");
     delay(50000);
     setup();
   }
-  
   set_sleep_mode(SLEEP_MODE_PWR_SAVE);
   //inizializza sensore DHT 
-  dht.setup(2, DHT::DHT22); // data pin 2
-
+  dht.setup(2, DHT::DHT22);
   radio.begin();
-  network.begin(/*channel*/ 10, /*node address*/ MY_ADDRESS);   
+  radio.setDataRate(RF24_250KBPS);
+  radio.setPALevel(RF24_PA_HIGH);
+  network.begin(/*channel*/ 125, /*node address*/ MY_ADDRESS);  
 }
 
 void loop()
 {
-  
  if(wakeCount==(cycleNum-1))
  {
+    radio.powerUp();
+    // Pump the network regularly
+    network.update();
     wakeCount=0;
     dht.resetTimer();
     //Controlla le condizioni e le invia ongi 75 cicli di watchDog
     char status;
     double T,P;
-    float humidity, temperature;
-    // You must first get a temperature measurement to perform a pressure reading.
-    
-    // Start a temperature measurement:
-    // If request is successful, the number of ms to wait is returned.
-    // If request is unsuccessful, 0 is returned.
-    status = pressure.startTemperature();
-    if (status != 0)
+    float humidity, temperature;                        // You must first get a temperature measurement to perform a pressure reading.
+                                                        // Start a temperature measurement:
+    status = pressure.startTemperature();               // If request is successful, the number of ms to wait is returned.
+    if (status != 0)                                    // If request is unsuccessful, 0 is returned.
     {
-      // Wait for the measurement to complete:
-      delay(status);
-  
-      // Retrieve the completed temperature measurement:
-      // Note that the measurement is stored in the variable T.
-      // Function returns 1 if successful, 0 if failure.
-  
-      status = pressure.getTemperature(T);
-      if (status != 0)
-      {
+      delay(status);                                    // Wait for the measurement to complete:
+      status = pressure.getTemperature(T);              // Retrieve the completed temperature measurement:
+      if (status != 0)                                  // Note that the measurement is stored in the variable T.
+      {                                                 // Function returns 1 if successful, 0 if failure.
         // Print out the measurement:
 //        Serial.println();
 //        Serial.print("temperature of BMP180: ");
 //        Serial.print(T,2);
 //        Serial.println(" deg C");
-//        
-        // Start a pressure measurement:
-        // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
-        // If request is successful, the number of ms to wait is returned.
-        // If request is unsuccessful, 0 is returned.
-        status = pressure.startPressure(3);
-        if (status != 0)
-        {
-          // Wait for the measurement to complete:
-          delay(status);
-  
-          // Retrieve the completed pressure measurement:
-          // Note that the measurement is stored in the variable P.
-          // Note also that the function requires the previous temperature measurement (T).
-          // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
-          // Function returns 1 if successful, 0 if failure.
-  
-          status = pressure.getPressure(P,T);
+        status = pressure.startPressure(3);            // Start a pressure measurement:
+        if (status != 0)                               // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
+        {                                              // If request is successful, the number of ms to wait is returned.
+                                                       // If request is unsuccessful, 0 is returned.
+          delay(status);                                // Wait for the measurement to complete:
+          status = pressure.getPressure(P,T);        // Function returns 1 if successful, 0 if failure.
           if (status != 0)
           {
             // Print out the measurement:
@@ -153,8 +133,6 @@ void loop()
     }
     else Serial.println("error starting temperature measurement\n");
     
-    //delay(dht.getMinimumSamplingPeriod());
-    
     //recupero i valori dal sensore DHT 
     uint8_t k=3;
     do {
@@ -165,10 +143,9 @@ void loop()
       k--;
     }
     while(dht.getStatus() == DHT::ERROR_TIMEOUT && k>0);
-    
     //Stampo i valori appena letti
-    Serial.print("DHT Status: ");
-    Serial.println(dht.getStatusString());
+//    Serial.print("DHT Status: ");
+//    Serial.println(dht.getStatusString());
 //    Serial.print("tHumidity (%): ");
 //    Serial.println(humidity, 1);
 //    Serial.print("tTemperature (C)/t(F): ");
@@ -176,32 +153,25 @@ void loop()
 //    Serial.print("/ ");
 //    Serial.println(dht.toFahrenheit(temperature), 1);
 //    delay(100);
-    
+
     //invio messaggio
     Serial.println("Sending to meteo station");
     payload_Sensor_1 payload = { temperature, humidity, P, T, NAN};
     RF24NetworkHeader header(/*to node*/ PARENT_ADDRESS);
     network.write(header,&payload,sizeof(payload));
-  
-    //pausa 
-    //delay(299900);
+    
+    radio.powerDown();
     wdt_reset();
     myWatchdogEnable();
-    //Serial.println("...going to sleep.");
-    //delay(100);
     sleep_mode();
  }
- else
- {
-   wakeCount++;
-   //Serial.print(wakeCount);
-   //delay(100);
-   wdt_reset();
-   myWatchdogEnable();
-   //Serial.println("...going to sleep.");
-   //delay(100);
-   sleep_mode();
- }
+  else
+  {
+    wakeCount++;
+    wdt_reset();
+    myWatchdogEnable();
+    sleep_mode();
+  }
 }
 
 
@@ -220,7 +190,6 @@ ISR(WDT_vect)
 {
   cli();
   wdt_disable();
-  //Serial.println("wakeup!");
   sei();
 }
 
